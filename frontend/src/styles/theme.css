@@ -1,0 +1,325 @@
+/* ==========================================================================
+   深色黑客风主题：GitHub Dark 底 + 绿色辅助（对应详细设计 §6A）
+   Element Plus 深色变量覆盖；动效仅限 hover 与进度反馈。
+   ========================================================================== */
+
+:root,
+html.dark {
+  /* 背景体系 */
+  --sd-bg-page: #0d1117;
+  --sd-bg-panel: #161b22;
+  --sd-bg-hover: #21262d;
+  --sd-border: #30363d;
+  --sd-green: #3fb950;
+  --sd-green-bright: #00e676;
+  --sd-green-text: #7ee787;
+  --sd-text: #e6edf3;
+  --sd-text-sub: #9da7b3;
+  --sd-red: #f85149;
+  --sd-yellow: #d29922;
+  --sd-link: #58a6ff;
+
+  /* Element Plus 深色变量覆盖 */
+  --el-color-primary: #3fb950;
+  --el-color-primary-light-3: #4fc861;
+  --el-color-primary-light-5: #6fd483;
+  --el-color-primary-light-7: #9be3a9;
+  --el-color-primary-light-8: #bcecc7;
+  --el-color-primary-light-9: rgba(63, 185, 80, 0.12);
+  --el-color-primary-dark-2: #359a43;
+  --el-color-danger: #f85149;
+  --el-color-warning: #d29922;
+  --el-color-success: #3fb950;
+  --el-bg-color-page: #0d1117;
+  --el-bg-color: #161b22;
+  --el-bg-color-overlay: #161b22;
+  --el-fill-color-blank: #0d1117;
+  --el-fill-color: #21262d;
+  --el-fill-color-light: #161b22;
+  --el-fill-color-lighter: #161b22;
+  --el-text-color-primary: #e6edf3;
+  --el-text-color-regular: #c9d1d9;
+  --el-text-color-secondary: #9da7b3;
+  --el-border-color: #30363d;
+  --el-border-color-light: #30363d;
+  --el-border-color-lighter: #30363d;
+  --el-border-color-extra-light: #21262d;
+  --el-mask-color: rgba(13, 17, 23, 0.8);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--sd-bg-page);
+  color: var(--sd-text);
+  font-family: 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 等宽字体：URL/域名/IP/正则/关键词标签/任务编号/日志 */
+.mono,
+code,
+kbd {
+  font-family: 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
+}
+
+a {
+  color: var(--sd-link);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--sd-green-text);
+}
+
+/* ---------------- Element 组件微调 ---------------- */
+.el-card {
+  border-color: var(--sd-border);
+  --el-card-border-color: var(--sd-border);
+}
+
+.el-table {
+  --el-table-border-color: var(--sd-border);
+  --el-table-header-bg-color: #161b22;
+  --el-table-tr-bg-color: #161b22;
+  --el-table-bg-color: #161b22;
+  --el-table-row-hover-bg-color: #21262d;
+  --el-table-header-text-color: var(--sd-green-text);
+  --el-table-text-color: var(--sd-text);
+}
+.el-table th.el-table__cell {
+  border-bottom: 1px solid var(--sd-green) !important;
+  font-weight: 600;
+}
+.el-table__inner-wrapper::before {
+  background-color: var(--sd-border);
+}
+
+/* 输入框聚焦绿边 */
+.el-input__wrapper,
+.el-textarea__inner,
+.el-select__wrapper {
+  background-color: #0d1117 !important;
+  box-shadow: 0 0 0 1px var(--sd-border) inset !important;
+}
+.el-input__wrapper.is-focus,
+.el-textarea__inner:focus,
+.el-select__wrapper.is-focused {
+  box-shadow: 0 0 0 1px var(--sd-green) inset !important;
+}
+.el-textarea__inner {
+  color: var(--sd-text);
+}
+
+/* 主按钮：绿底黑字；次级按钮绿描边 */
+.el-button--primary {
+  --el-button-bg-color: var(--sd-green);
+  --el-button-border-color: var(--sd-green);
+  --el-button-text-color: #0d1117;
+  --el-button-hover-bg-color: var(--sd-green-bright);
+  --el-button-hover-border-color: var(--sd-green-bright);
+  --el-button-hover-text-color: #0d1117;
+  font-weight: 600;
+}
+.el-button--default {
+  --el-button-bg-color: transparent;
+  --el-button-border-color: rgba(63, 185, 80, 0.6);
+  --el-button-text-color: var(--sd-green-text);
+  --el-button-hover-bg-color: rgba(63, 185, 80, 0.12);
+  --el-button-hover-border-color: var(--sd-green);
+  --el-button-hover-text-color: var(--sd-green-text);
+}
+.el-button--danger {
+  --el-button-bg-color: transparent;
+  --el-button-border-color: rgba(248, 81, 73, 0.6);
+  --el-button-text-color: var(--sd-red);
+  --el-button-hover-bg-color: rgba(248, 81, 73, 0.12);
+  --el-button-hover-text-color: var(--sd-red);
+}
+
+.el-dialog,
+.el-drawer {
+  border: 1px solid var(--sd-border);
+}
+
+.el-tag {
+  border-radius: 2px;
+}
+
+.el-progress-bar__outer {
+  background-color: #0d1117;
+}
+
+.el-switch.is-checked .el-switch__core {
+  border-color: var(--sd-green) !important;
+  background-color: var(--sd-green) !important;
+}
+
+.el-menu {
+  border-right: none !important;
+}
+
+/* ---------------- 业务样式 ---------------- */
+.page-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 16px;
+  font-size: 18px;
+  font-weight: 600;
+}
+.page-title .bar {
+  width: 3px;
+  height: 16px;
+  background: var(--sd-green);
+  box-shadow: 0 0 6px var(--sd-green);
+}
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.filter-bar .el-input,
+.filter-bar .el-select {
+  width: 170px;
+}
+
+/* 状态徽章：等宽小写 */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 12px;
+  text-transform: lowercase;
+}
+.status-badge .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+/* 级别色点：高=红 中=黄 低=灰 */
+.level-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+}
+.level-high { background: var(--sd-red); box-shadow: 0 0 6px rgba(248, 81, 73, 0.7); }
+.level-medium { background: var(--sd-yellow); box-shadow: 0 0 6px rgba(210, 153, 34, 0.7); }
+.level-low { background: var(--sd-text-sub); }
+
+/* 终端窗口：任务详情实时日志 */
+.terminal {
+  background: #0a0d12;
+  border: 1px solid var(--sd-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.terminal-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #161b22;
+  border-bottom: 1px solid var(--sd-border);
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 12px;
+  color: var(--sd-text-sub);
+}
+.terminal-head .lamp {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.terminal-body {
+  padding: 12px;
+  height: 280px;
+  overflow-y: auto;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--sd-green-text);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.terminal-body .log-warn { color: var(--sd-yellow); }
+.terminal-body .log-err { color: var(--sd-red); }
+.terminal-body .log-info { color: var(--sd-text-sub); }
+.terminal-body .log-hit { color: var(--sd-red); }
+
+/* 风控告警横幅 */
+.risk-banner {
+  border: 1px solid var(--sd-red) !important;
+  background: rgba(248, 81, 73, 0.1) !important;
+  border-radius: 4px;
+  margin-bottom: 14px;
+}
+
+/* 数字卡片 */
+.stat-card {
+  background: var(--sd-bg-panel);
+  border: 1px solid var(--sd-border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-card .num {
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--sd-green-bright);
+}
+.stat-card .label {
+  color: var(--sd-text-sub);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+/* 截图缩略 */
+.shot-thumb {
+  width: 72px;
+  height: 48px;
+  object-fit: cover;
+  border: 1px solid var(--sd-green);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: box-shadow 0.15s;
+}
+.shot-thumb:hover {
+  box-shadow: 0 0 8px rgba(63, 185, 80, 0.8);
+}
+
+/* 空状态 ASCII */
+.empty-ascii {
+  text-align: center;
+  padding: 40px 0 10px;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  color: var(--sd-green-text);
+  white-space: pre;
+  line-height: 1.3;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #30363d;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover { background: #3fb950; }

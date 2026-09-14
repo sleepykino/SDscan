@@ -1,0 +1,22 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Node
+node_modules/
+frontend/dist/
+
+# 运行时数据（截图/附件/数据库/本地设置）
+data/*
+!data/.gitkeep
+backend/tests/_e2e_artifacts/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+
+#doc
+doc/*
