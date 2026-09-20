@@ -117,7 +117,10 @@ async def test_platform(
         )
     else:
         page_obj = await web_collector.fetch(
-            url, cookie=platform.cookie or "", save_screenshot=payload.save_screenshot
+            url,
+            cookie=platform.cookie or "",
+            extra_headers=dict(platform.headers or {}),
+            save_screenshot=payload.save_screenshot,
         )
 
     risk_reason = None if page_obj.error else detect_risk(

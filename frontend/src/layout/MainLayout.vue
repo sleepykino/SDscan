@@ -4,7 +4,7 @@
       <div class="logo">
         <span class="logo-mark">▚</span>
         <div>
-          <div class="logo-en">SENTINEL</div>
+          <div class="logo-en">SDSCAN</div>
           <div class="logo-cn">敏感信息检索</div>
         </div>
       </div>

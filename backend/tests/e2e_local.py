@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -26,7 +27,9 @@ from pathlib import Path
 import httpx
 import websockets
 
-BACKEND = "http://127.0.0.1:8000"
+# 后端端口可用环境变量覆盖，避免与正在运行的实例冲突（共享同一 data 目录）
+BACKEND_PORT = int(os.environ.get("SDSCAN_E2E_PORT", "8000"))
+BACKEND = f"http://127.0.0.1:{BACKEND_PORT}"
 FIXTURE_PORT = 18080
 FIXTURE = f"http://127.0.0.1:{FIXTURE_PORT}"
 VENV_PY = str(Path(__file__).resolve().parents[2] / ".venv" / "Scripts" / "python.exe")
@@ -100,7 +103,7 @@ def start_fixture():
 def wait_backend():
     for _ in range(60):
         try:
-            with socket.create_connection(("127.0.0.1", 8000), timeout=1):
+            with socket.create_connection(("127.0.0.1", BACKEND_PORT), timeout=1):
                 return
         except OSError:
             time.sleep(0.5)
@@ -134,7 +137,9 @@ class WsCollector:
         return self
 
     async def _run(self):
-        async with websockets.connect(f"ws://127.0.0.1:8000/ws/tasks/{self.task_id}") as ws:
+        async with websockets.connect(
+            f"ws://127.0.0.1:{BACKEND_PORT}/ws/tasks/{self.task_id}"
+        ) as ws:
             async for message in ws:
                 evt = json.loads(message)
                 self.events.append(evt)
@@ -159,6 +164,7 @@ async def main():
         cwd=str(Path(__file__).resolve().parents[1]),
         stdout=log_fh,
         stderr=subprocess.STDOUT,
+        env={**os.environ, "SDSCAN_PORT": str(BACKEND_PORT)},
     )
     created = {"tasks": [], "platforms": [], "rule": None}
     success = False

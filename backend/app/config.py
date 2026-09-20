@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 # backend/app/config.py -> parents[0]=app [1]=backend [2]=项目根
@@ -16,8 +17,8 @@ ATTACHMENT_DIR = DATA_DIR / "attachments"
 DB_PATH = DATA_DIR / "sdscan.db"
 SETTINGS_PATH = DATA_DIR / "settings.json"
 
-HOST = "127.0.0.1"
-PORT = 8000
+HOST = os.environ.get("SDSCAN_HOST", "127.0.0.1")
+PORT = int(os.environ.get("SDSCAN_PORT", "8000"))
 
 DEFAULT_SETTINGS = {
     "default_request_interval": 5.0,   # 默认请求间隔（秒）

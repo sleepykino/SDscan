@@ -150,14 +150,15 @@ PLATFORMS: list[dict] = [
         "code": "pansoso",
         "name": "盘搜搜",
         "channel_type": "web",
-        "url_template": "https://www.pansoso.com/zh/{keyword}",
-        "page_start": 0,
-        "page_step": 0,
+        "url_template": "https://www.pansoso.com/zh/{keyword}_{page}",
+        "page_start": 1,
+        "page_step": 1,
         "selectors": {
-            "container": "div.search-list li, ul.list li",
-            "title": "a",
-            "link": "a::attr(href)",
+            "container": "div.pss",
+            "title": "h2 a",
+            "link": "h2 a::attr(href)",
         },
+        "notes": "2026-09-20 实测：分页为 _{page} 后缀（第1页 /zh/xx_1）",
     },
     {
         "code": "wenku",
@@ -178,28 +179,41 @@ PLATFORMS: list[dict] = [
         "channel_type": "web",
         "url_template": (
             "https://www.docin.com/search.do?nkey={keyword}"
-            "&searchcat=1001&currentPage={page}"
+            "&searchcat=1001&searchType_banner=p&currentPage={page}"
         ),
         "page_start": 1,
         "page_step": 1,
+        "headers": {"Referer": "https://www.docin.com/"},
         "selectors": {
-            "container": "div.docin-layout-list-item, li.result-item",
-            "title": "a.title, h3 a",
-            "link": "a.title::attr(href), h3 a::attr(href)",
+            "container": "div.doc-list-style2 dl, div.doc-list-style2 > div",
+            "title": "a[title], a.doc-title, h3 a",
+            "link": "a[title]::attr(href), a.doc-title::attr(href), h3 a::attr(href)",
         },
+        "notes": (
+            "2026-09-20 实测：无 Referer 请求被服务端 204 中止（ERR_ABORTED），"
+            "必须携带 Referer 头；请求频率过快返回 403 风控页。"
+            "选择器为保守推断值，若解析为 0 条请用「测试」按钮校准"
+        ),
     },
     {
         "code": "doc88",
         "name": "道客巴巴",
         "channel_type": "web",
-        "url_template": "https://www.doc88.com/tag/{keyword}",
-        "page_start": 0,
-        "page_step": 0,
+        "url_template": (
+            "https://www.doc88.com/search/post.do?from=1&h=1&p={page}"
+            "&q={keyword}&pageRange=0&pageNum=0&ct=0"
+        ),
+        "page_start": 1,
+        "page_step": 1,
         "selectors": {
-            "container": "div.doc_list li, ul.list li",
-            "title": "a",
-            "link": "a::attr(href)",
+            "container": "div.sd-list-con",
+            "title": "a.sd-title",
+            "link": "a.sd-title::attr(href)",
         },
+        "notes": (
+            "2026-09-20 实测：tag 页翻页为 JS AJAX，URL 参数 ?p= 无效；"
+            "改用搜索 AJAX 接口 /search/post.do，每页 10 条，不依赖 Cookie"
+        ),
     },
     {
         "code": "yuque",
@@ -335,6 +349,13 @@ SYNTAX_DICTS: list[dict] = [
 ]
 
 
+# 采集配置需要升级到新默认值的平台 code：
+# 无条件覆盖 URL/翻页/选择器/请求头等采集参数（保留 cookie、enabled 等用户态字段）。
+# 背景：2026-09-20 实测修正三平台分页与搜索方式，旧库中已存在的行不会被
+# 幂等播种更新，需在此显式升级。
+UPGRADE_PLATFORM_CODES = {"pansoso", "docin", "doc88"}
+
+
 def seed_all() -> None:
     """幂等播种：已存在的 code/规则名不重复插入，不覆盖用户修改。"""
     db = SessionLocal()
@@ -358,6 +379,19 @@ def seed_all() -> None:
                     notes=item.get("notes", ""),
                 )
             )
+
+        # 升级已存在平台的采集配置（见 UPGRADE_PLATFORM_CODES 注释）
+        defaults = {item["code"]: item for item in PLATFORMS}
+        for row in db.execute(select(Platform)).scalars():
+            item = defaults.get(row.code)
+            if item is None or row.code not in UPGRADE_PLATFORM_CODES:
+                continue
+            row.url_template = item["url_template"]
+            row.page_start = item["page_start"]
+            row.page_step = item["page_step"]
+            row.selectors = item.get("selectors", {})
+            row.headers = item.get("headers", {})
+            row.notes = item.get("notes", "")
 
         existing_names = {n for (n,) in db.execute(select(SensitiveRule.name)).all()}
         for item in RULES:

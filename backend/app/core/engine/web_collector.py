@@ -39,6 +39,8 @@ class WebCollector:
         self._solve_ctx = None
         self._solve_page = None
         self._solve_event: asyncio.Event | None = None
+        # 进行中的抓取页面登记：取消任务时强制关闭以立即中断抓取
+        self._active_pages: set = set()
         # 平台最近一次触发风控的 URL，供有头过码直接打开
         self.last_blocked_url: dict[int, str] = {}
 
@@ -118,6 +120,7 @@ class WebCollector:
             if cookie:
                 await context.add_cookies(playwright_cookies(cookie, url))
             page = await context.new_page()
+            self._active_pages.add(page)
             status = 0
             try:
                 response = await page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
@@ -150,27 +153,71 @@ class WebCollector:
             except Exception as exc:
                 return FetchedPage(url=url, status=status, error=f"页面抓取失败：{exc}")
             finally:
+                self._active_pages.discard(page)
                 await context.close()
+
+    def close_pages_nowait(self) -> None:
+        """取消任务时中断所有进行中的抓取：关闭页面使 goto/截图立刻失败。
+
+        采用同步排程避免在持有采集锁的 fetch 协程内死锁等待。
+        """
+        pages = list(self._active_pages)
+        for page in pages:
+            try:
+                asyncio.get_running_loop().create_task(self._close_quietly(page))
+            except RuntimeError:
+                pass
+
+    @staticmethod
+    async def _close_quietly(page) -> None:
+        try:
+            await page.close()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ #
     # 半自动人工过码
     # ------------------------------------------------------------------ #
-    async def start_solve(self, url: str) -> None:
+    async def start_solve(self, url: str, *, extra_headers: dict | None = None) -> None:
         """弹出有头浏览器到风控页面，等待用户人工完成验证。"""
+        from urllib.parse import urlparse
+
         from playwright.async_api import async_playwright
 
         if self._headed_browser is not None:
             raise RuntimeError("已有一个过码窗口打开，请先完成或取消")
 
         settings = load_settings()
+        headers = dict(extra_headers or {})
         pw = await async_playwright().start()
-        browser = await pw.chromium.launch(headless=False, args=LAUNCH_ARGS)
-        context = await browser.new_context(
-            user_agent=settings.get("user_agent"), locale="zh-CN"
-        )
-        await context.add_init_script(_STEALTH_JS)
-        page = await context.new_page()
-        await page.goto(url, timeout=60000, wait_until="domcontentloaded")
+        try:
+            browser = await pw.chromium.launch(headless=False, args=LAUNCH_ARGS)
+            # 携带平台请求头（如豆丁必须的 Referer），否则风控页 URL 会被 204 中止
+            context = await browser.new_context(
+                user_agent=settings.get("user_agent"),
+                locale="zh-CN",
+                extra_http_headers=headers,
+            )
+            await context.add_init_script(_STEALTH_JS)
+            page = await context.new_page()
+            try:
+                await page.goto(
+                    url,
+                    timeout=60000,
+                    wait_until="domcontentloaded",
+                    referer=headers.get("Referer") or headers.get("referer"),
+                )
+            except Exception:
+                # 风控 URL 打不开时退回站点首页，保证窗口内仍可人工完成验证
+                parsed = urlparse(url)
+                home = f"{parsed.scheme}://{parsed.netloc}/" if parsed.netloc else url
+                await page.goto(home, timeout=60000, wait_until="domcontentloaded")
+        except Exception:
+            try:
+                await pw.stop()
+            except Exception:
+                pass
+            raise
         self._headed_pw = pw
         self._headed_browser = browser
         self._solve_ctx = context

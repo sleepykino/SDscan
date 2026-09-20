@@ -47,6 +47,37 @@ from .sensitive import SensitiveMatcher
 MAX_ATTEMPTS = 3
 
 
+def recover_orphan_tasks() -> None:
+    """服务重启后清理僵尸任务。
+
+    上次进程中断时可能遗留 status=running 的任务（调度器内存实例已丢失），
+    若不处理会永远无法取消也无法启动。此处统一复位为 failed，
+    其 running 组合恢复 pending，配合断点续跑机制可重新启动。
+    """
+    from ..database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        orphans = list(
+            db.execute(select(Task).where(Task.status == "running")).scalars()
+        )
+        for task in orphans:
+            task.status = "failed"
+            task.error_msg = "服务重启，任务已中断（可重新启动续跑）"
+            task.finished_at = datetime.now()
+            for unit in db.execute(
+                select(TaskUnit).where(
+                    TaskUnit.task_id == task.id, TaskUnit.status == "running"
+                )
+            ).scalars():
+                unit.status = "pending"
+                unit.error_msg = ""
+        if orphans:
+            db.commit()
+    finally:
+        db.close()
+
+
 class RunControl:
     """单次运行的运行时控制信号。"""
 
@@ -101,14 +132,18 @@ class Scheduler:
             return
         ctrl.running_gate.set()
 
-    async def cancel(self, task_id: int) -> None:
+    async def cancel(self, task_id: int) -> bool:
+        """发出取消信号并中断进行中的抓取。返回是否存在运行实例。"""
         ctrl = self.runs.get(task_id)
         if ctrl is None:
-            return
+            return False
         ctrl.cancelled = True
         ctrl.running_gate.set()
         for event in list(ctrl.unblock_events.values()):
             event.set()
+        # 强制关闭进行中的抓取页面，使 fetch 立即失败返回
+        web_collector.close_pages_nowait()
+        return True
 
     async def unblock_platform(self, task_id: int, platform_id: int) -> None:
         """人工过码完成后解除平台阻塞。"""
@@ -354,6 +389,15 @@ class Scheduler:
 
                     page_obj = await self._fetch(platform, url, settings)
 
+                    if ctrl.cancelled:
+                        # 取消：丢弃本次抓取（含被中断产生的 error），
+                        # 单元复位 pending，避免任务结束后残留“执行中”
+                        unit.status = "pending"
+                        unit.error_msg = ""
+                        db.commit()
+                        await self._emit_unit(unit, platform.name)
+                        break
+
                     if page_obj.error:
                         unit.error_msg = page_obj.error[:500]
                         if unit.attempts >= MAX_ATTEMPTS:
@@ -421,7 +465,13 @@ class Scheduler:
             db.commit()
             await self._emit(task_id, {"type": "stats", "stats": stats})
             await self._emit(
-                task_id, {"type": "task_done", "status": task.status, "stats": stats}
+                task_id,
+                {
+                    "type": "task_done",
+                    "status": task.status,
+                    "stats": stats,
+                    "error": task.error_msg,
+                },
             )
             await self._log(task_id, f"> 任务结束：{task.status}")
         finally:
@@ -445,6 +495,7 @@ class Scheduler:
         return await web_collector.fetch(
             url,
             cookie=platform.cookie or "",
+            extra_headers=dict(platform.headers or {}),
             timeout=float(settings.get("http_timeout", 20)),
         )
 

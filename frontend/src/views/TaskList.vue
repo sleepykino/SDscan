@@ -62,10 +62,7 @@
               v-if="['pending', 'failed'].includes(row.status)"
               link type="success" @click="start(row)"
             >启动</el-button>
-            <el-button
-              v-if="row.status !== 'running'"
-              link type="danger" @click="remove(row)"
-            >删除</el-button>
+            <el-button link type="danger" @click="remove(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>

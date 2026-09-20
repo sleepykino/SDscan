@@ -15,6 +15,7 @@
       <el-button v-if="task.status === 'paused_manual'" type="primary"
         size="small" @click="resume">恢复</el-button>
       <el-button v-if="isActive" type="danger" size="small" @click="cancel">取消</el-button>
+      <el-button type="danger" size="small" plain @click="remove">删除</el-button>
       <el-button size="small" @click="$router.push('/tasks')">返回</el-button>
     </h2>
 
@@ -105,13 +106,14 @@
 
 <script setup>
 import { computed, nextTick, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import StatusBadge from '../components/StatusBadge.vue'
 import { useTaskSocket } from '../composables/useTaskSocket'
 import { platformApi, shotUrl, taskApi } from '../api'
 
 const route = useRoute()
+const router = useRouter()
 const taskId = Number(route.params.id)
 const task = ref(null)
 const units = ref([])
@@ -205,7 +207,10 @@ function onEvent(evt) {
       appendLog(`! ${evt.platform} 风控：${evt.reason}`, 'log-warn')
       break
     case 'task_done':
-      appendLog(`= 任务结束：${evt.status}`, evt.status === 'done' ? '' : 'log-err')
+      appendLog(
+        `= 任务结束：${evt.status}${evt.error ? ' · ' + evt.error : ''}`,
+        evt.status === 'done' ? '' : 'log-err'
+      )
       task.value && (task.value.status = evt.status)
       taskApi.get(taskId).then((t) => (task.value = t))
       loadAll()
@@ -234,11 +239,27 @@ async function resume() {
 }
 async function cancel() {
   try {
-    await ElMessageBox.confirm('确认取消当前任务？未完成组合将标记失败。', '取消任务', {
+    await ElMessageBox.confirm('确认取消当前任务？未完成组合将停止执行。', '取消任务', {
       type: 'warning',
     })
     await taskApi.cancel(taskId)
     ElMessage.success('取消中')
+    appendLog('! 已发送取消指令，正在中断当前抓取…', 'log-warn')
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error(e.message)
+  }
+}
+
+async function remove() {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除任务「${task.value.name}」？其组合、结果、命中、附件与域名数据将一并删除。`,
+      '删除任务',
+      { type: 'warning' }
+    )
+    await taskApi.remove(taskId)
+    ElMessage.success('已删除')
+    router.push('/tasks')
   } catch (e) {
     if (e !== 'cancel') ElMessage.error(e.message)
   }

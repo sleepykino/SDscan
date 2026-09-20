@@ -1,16 +1,27 @@
 """任务 CRUD、生命周期控制、组合进度与人工过码。"""
 from __future__ import annotations
 
+from datetime import datetime
+from urllib.parse import urlparse
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from ..config import load_settings
+from ..config import DATA_DIR, load_settings
 from ..core.engine.web_collector import web_collector
-from ..core.rule_engine import build_url
 from ..core.scheduler import scheduler
 from ..database import get_db
-from ..models import Task, TaskUnit
+from ..models import (
+    Attachment,
+    DomainList,
+    Platform,
+    SensitiveHit,
+    SearchResult,
+    Task,
+    TaskUnit,
+)
+from ..ws.manager import manager
 from .. import schemas
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -73,6 +84,22 @@ def delete_task(task_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "任务不存在")
     if task_id in scheduler.runs:
         raise HTTPException(400, "任务执行中，请先取消再删除")
+    # 手动级联删除（SearchResult/Hits/Attachment/DomainList 未配置 ORM cascade）
+    db.execute(delete(SensitiveHit).where(SensitiveHit.task_id == task_id))
+    for att in db.execute(
+        select(Attachment).where(Attachment.task_id == task_id)
+    ).scalars():
+        if att.file_path:
+            file = DATA_DIR / att.file_path
+            try:
+                if file.is_file():
+                    file.unlink()
+            except OSError:
+                pass
+        db.delete(att)
+    db.execute(delete(SearchResult).where(SearchResult.task_id == task_id))
+    db.execute(delete(DomainList).where(DomainList.task_id == task_id))
+    db.execute(delete(TaskUnit).where(TaskUnit.task_id == task_id))
     db.delete(task)
     db.commit()
     return {"message": "已删除"}
@@ -133,8 +160,24 @@ async def resume_task(task_id: int):
 
 
 @router.post("/{task_id}/cancel", response_model=schemas.MessageOut)
-async def cancel_task(task_id: int):
-    await scheduler.cancel(task_id)
+async def cancel_task(task_id: int, db: Session = Depends(get_db)):
+    task = db.get(Task, task_id)
+    if task is None:
+        raise HTTPException(404, "任务不存在")
+    has_runner = await scheduler.cancel(task_id)
+    if not has_runner:
+        # 无运行实例（典型：服务重启遗留的 running 状态）——直接落库为已取消
+        if task.status not in ("running", "paused_manual"):
+            raise HTTPException(400, f"任务状态 {task.status}，无需取消")
+        task.status = "failed"
+        task.error_msg = "用户取消"
+        task.finished_at = datetime.now()
+        db.commit()
+        await manager.broadcast(
+            task_id,
+            {"type": "task_done", "status": "failed", "error": "用户取消"},
+        )
+        return {"message": "已取消"}
     return {"message": "取消中"}
 
 
@@ -146,10 +189,11 @@ async def solve_start(task_id: int, platform_id: int, db: Session = Depends(get_
         raise HTTPException(404, "平台不存在")
     url = web_collector.last_blocked_url.get(platform_id)
     if not url:
-        # 回退：用平台首页模板
-        url = build_url(platform.url_template, "", platform.page_start)
+        # 回退：站点首页（搜索模板的空关键词页或 AJAX 接口不适合人工过码）
+        parsed = urlparse(platform.url_template)
+        url = f"{parsed.scheme}://{parsed.netloc}/" if parsed.netloc else platform.url_template
     try:
-        await web_collector.start_solve(url)
+        await web_collector.start_solve(url, extra_headers=dict(platform.headers or {}))
     except RuntimeError as exc:
         raise HTTPException(409, str(exc))
     except Exception as exc:

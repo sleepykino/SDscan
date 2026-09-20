@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import BASE_DIR, DATA_DIR, ensure_dirs
 from .core.engine.web_collector import web_collector
+from .core.scheduler import recover_orphan_tasks
 from .database import init_db
 from .api import (
     attachments,
@@ -29,12 +30,13 @@ from .api import (
 async def lifespan(app: FastAPI):
     ensure_dirs()
     init_db()
+    recover_orphan_tasks()
     yield
     await web_collector.aclose()
 
 
 app = FastAPI(
-    title="多平台敏感信息检索系统",
+    title="SDscan · 多平台敏感信息检索系统",
     version="1.0.0",
     lifespan=lifespan,
 )
