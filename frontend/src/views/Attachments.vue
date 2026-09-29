@@ -3,7 +3,7 @@
     <h2 class="page-title">
       <span class="bar" />附件中心
       <span class="mono" style="margin-left:10px;color:var(--sd-text-sub);font-size:13px">
-        T3 下载的公开附件（pdf/docx/xlsx 自动解析）
+        T3 下载的公开附件
       </span>
     </h2>
 

@@ -60,6 +60,12 @@ const routes = [
         component: () => import('../views/Attachments.vue'),
         meta: { title: '附件中心', icon: 'Paperclip' },
       },
+      {
+        path: 'data-sources',
+        name: 'data-sources',
+        component: () => import('../views/DataSources.vue'),
+        meta: { title: 'T2 数据源', icon: 'Coin' },
+      },
     ],
   },
 ]

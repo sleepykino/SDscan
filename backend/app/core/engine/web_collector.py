@@ -127,6 +127,7 @@ class WebCollector:
                 if response is not None:
                     status = response.status
                 await page.wait_for_timeout(wait_ms)
+                await self._settle_redirect_shell(page)
                 html = await page.content()
                 title = await page.title()
                 try:
@@ -173,6 +174,35 @@ class WebCollector:
         try:
             await page.close()
         except Exception:
+            pass
+
+    @staticmethod
+    async def _settle_redirect_shell(page, max_wait: float = 4.0) -> None:
+        """识别 meta/JS 跳转中转壳（如 cn.bing.com 的 rdrig 页）并等待落地。
+
+        严格双条件，避免拖慢正常页面：①HTML 出现 refresh/location 跳转或 rdrig 令牌；
+        ②正文可见文本极少（<300 字符）。满足后每 0.5s 轮询，正文增长或超时即止。
+        """
+        try:
+            state = await page.evaluate(
+                """() => {
+                  const html = document.documentElement ? document.documentElement.innerHTML : '';
+                  const redirectish = /http-equiv=["']?refresh|location\\.(replace|href)|window\\.location\\s*=|rdrig=/.test(html);
+                  const text = document.body ? document.body.innerText.trim() : '';
+                  return {redirectish: redirectish, len: text.length};
+                }"""
+            )
+            if not state.get("redirectish") or state.get("len", 0) >= 300:
+                return
+            for _ in range(int(max_wait / 0.5)):
+                await page.wait_for_timeout(500)
+                cur = await page.evaluate(
+                    "() => document.body ? document.body.innerText.trim().length : 0"
+                )
+                if cur >= 300:
+                    return
+        except Exception:
+            # 判定失败不影响原有抓取节奏
             pass
 
     # ------------------------------------------------------------------ #
@@ -227,6 +257,17 @@ class WebCollector:
     async def wait_solve(self) -> None:
         if self._solve_event is not None:
             await self._solve_event.wait()
+
+    @property
+    def solve_page(self):
+        """当前有头过码页（miit 等 provider 在用户完成后读取页面内容用）。"""
+        return self._solve_page
+
+    async def evaluate_solve_page(self, expression, arg=None):
+        """在有头过码页面上执行 JS（供 T2 工信部备案 provider 读取结果/翻页）。"""
+        if self._solve_page is None:
+            raise RuntimeError("没有打开的过码窗口")
+        return await self._solve_page.evaluate(expression, arg)
 
     async def finish_solve(self) -> str:
         """用户确认过码完成：导出 Cookie 头字符串并关闭有头窗口。"""

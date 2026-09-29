@@ -1,6 +1,6 @@
 <template>
   <el-dialog v-model="visible" title="全局设置" width="560px">
-    <el-form label-width="130px" @submit.prevent>
+    <el-form label-width="140px" @submit.prevent>
       <el-form-item label="默认请求间隔(秒)">
         <el-input-number v-model="form.default_request_interval" :min="0" :step="0.5" />
       </el-form-item>
@@ -25,6 +25,10 @@
         <el-input-number v-model="form.t3_download_limit" :min="1" :max="200" />
         <span class="hint">每个 T3 任务最多下载的附件数量</span>
       </el-form-item>
+      <div class="t2-entry">
+        T2 域名归集的数据源开关、密钥、subfinder 与爆破配置已移至左侧导航
+        <router-link to="/data-sources" class="t2-link">「T2 数据源」</router-link>
+      </div>
     </el-form>
     <template #footer>
       <el-button @click="visible = false">取消</el-button>
@@ -77,4 +81,19 @@ async function save() {
   color: var(--sd-text-sub);
   font-size: 12px;
 }
+.t2-entry {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--sd-border);
+  border-radius: 4px;
+  color: var(--sd-text-sub);
+  font-size: 12px;
+  line-height: 1.8;
+}
+.t2-link {
+  color: var(--sd-green, #3fb950);
+  text-decoration: none;
+  margin: 0 2px;
+}
+.t2-link:hover { text-decoration: underline; }
 </style>

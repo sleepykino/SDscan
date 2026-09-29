@@ -57,6 +57,7 @@ const menus = [
   { path: '/hits', title: '敏感命中', icon: 'Warning' },
   { path: '/domains', title: '域名清单', icon: 'Connection' },
   { path: '/attachments', title: '附件中心', icon: 'Paperclip' },
+  { path: '/data-sources', title: 'T2 数据源', icon: 'Coin' },
   { path: '/platforms', title: '平台配置', icon: 'Monitor' },
   { path: '/rules', title: '规则配置', icon: 'SetUp' },
 ]

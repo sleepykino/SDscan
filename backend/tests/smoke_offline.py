@@ -207,6 +207,213 @@ def test_app_imports() -> None:
     from app.main import app  # noqa: F401  全路由装配校验
 
 
+# ================================================================ P5 T2
+def test_engine_query_plans() -> None:
+    import base64
+    from app.core.discovery.engines import (
+        apex_query_plans,
+        qb64,
+        subdomain_query,
+    )
+
+    assert qb64("a") == base64.b64encode(b"a").decode()
+    fofa_plan = apex_query_plans("fofa", "示例有限公司", ["示例"])
+    assert fofa_plan[0] == ('icp.name="示例有限公司"', True)
+    assert any('cert="示例"' in q for q, _ in fofa_plan)
+    assert subdomain_query("fofa", "x.com") == 'domain="x.com"'
+    assert subdomain_query("hunter", "x.com") == 'domain.suffix="x.com"'
+    quake_plan = apex_query_plans("quake", "示例有限公司", [])
+    assert quake_plan[0][0].startswith('icp_company:"')
+    # 降级链：精确备案查询排在别名模糊查询之前
+    assert fofa_plan[0][1] is True and fofa_plan[-1][1] is False
+
+
+def test_merge_confidence_and_evidence() -> None:
+    from app.core.discovery import merge as mg
+    from app.core.discovery.base import Evidence
+
+    init_db()
+    db = SessionLocal()
+    try:
+        task = models.Task(name="P5-smoke", template_type="T2",
+                           unit_name="示例科技有限公司", keywords="示例云\n示例",
+                           platform_ids=[], max_pages=1, stats={})
+        db.add(task)
+        db.flush()
+
+        # high：ICP 主办单位全称精确一致
+        row, ev, is_new = mg.upsert_apex(
+            db, task, "https://www.shili.com/",
+            Evidence(provider="miit", icp_no="京ICP备1号",
+                     icp_unit="示例科技有限公司", site_name="示例官网"),
+            ["示例云"],
+        )
+        assert is_new and row.domain == "shili.com"
+        assert row.confidence == "high" and row.provider == "miit"
+        assert ev is not None
+
+        # 同 provider/ref_url 证据幂等
+        again, ev2, _ = mg.upsert_apex(
+            db, task, "shili.com",
+            Evidence(provider="miit", icp_no="京ICP备1号",
+                     icp_unit="示例科技有限公司", ref_url=""),
+            ["示例云"],
+        )
+        assert again.id == row.id and ev2 is None
+
+        # 第二源仅标题命中别名且交叉 → medium（2 源 + site_name 命中别名）
+        _, ev3, _ = mg.upsert_apex(
+            db, task, "shili.com",
+            Evidence(provider="fofa", site_name="示例云平台",
+                     ref_url="https://host/1"),
+            ["示例云"],
+        )
+        db.refresh(row)
+        assert ev3 is not None and row.confidence == "high"  # 已 high 不降级
+
+        # low：新域名只有通用搜索单源标题
+        low_row, _, _ = mg.upsert_apex(
+            db, task, "http://news.other.com/x",
+            Evidence(provider="se_general", site_name="无关页面",
+                     ref_url="http://news.other.com/x"),
+            ["示例云"],
+        )
+        assert low_row.domain == "other.com" and low_row.confidence == "low"
+
+        # medium：证书主体命中别名的单源新域名
+        med_row, _, _ = mg.upsert_apex(
+            db, task, "cert.example.cn",
+            Evidence(provider="hunter", cert_org="示例云计算分公司",
+                     ref_url="https://cert.example.cn"),
+            ["示例云"],
+        )
+        assert med_row.confidence == "medium"
+
+        # 子域归并与越界保护
+        sub_row, sub_ev, sub_new = mg.upsert_sub(
+            db, task, "WWW.shili.com", "shili.com",
+            Evidence(provider="crtsh", stage="sub", ref_url="crt")
+        )
+        assert sub_new and sub_row.domain == "www.shili.com"
+        assert sub_row.parent_domain == "shili.com" and sub_row.layer == "sub"
+        db.commit()
+    finally:
+        db.close()
+
+
+def _test_subdomain_guard():
+    """不属于 apex 的 host 必须抛错。"""
+    from app.core.discovery import merge as mg
+    from app.core.discovery.base import Evidence
+
+    db = SessionLocal()
+    try:
+        task = db.execute(select(models.Task).where(
+            models.Task.name == "P5-smoke")).scalar_one()
+        try:
+            mg.upsert_sub(db, task, "www.evil.com", "shili.com",
+                          Evidence(provider="crtsh", stage="sub"))
+            raise AssertionError("越界子域未被拦截")
+        except ValueError:
+            pass
+        # 清理冒烟数据（含证据/域名/任务）
+        tid = task.id
+        db.execute(models.DomainEvidence.__table__.delete().where(
+            models.DomainEvidence.task_id == tid))
+        db.execute(models.DomainList.__table__.delete().where(
+            models.DomainList.task_id == tid))
+        db.delete(task)
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_dns_wildcard_and_verify(monkey_hosts=None) -> None:
+    """泛解析基线 + 验活聚合（注入假解析，不产生真实网络）。"""
+    import asyncio
+    from app.core.discovery import dns
+
+    fake = {
+        "sdscan-xxx.shili.com": ["1.1.1.1"],
+        "sdscan-yyy.shili.com": ["1.1.1.1"],
+        "sdscan-zzz.shili.com": ["1.1.1.1"],
+        "www.shili.com": ["2.2.2.2"],
+        "vpn.shili.com": ["1.1.1.1"],   # 落入泛解析基线
+        "oa.shili.com": [],
+    }
+
+    async def fake_resolve(host: str, timeout: float = 5.0):
+        if host.startswith("sdscan-"):
+            return ["1.1.1.1"]  # 模拟泛解析：随机前缀均解析到同一 IP
+        return list(fake.get(host, []))
+
+    orig = dns.resolve_host
+    dns.resolve_host = fake_resolve
+    try:
+        baseline = asyncio.run(dns.detect_wildcard("shili.com"))
+        assert baseline == {"1.1.1.1"}, baseline
+        out = asyncio.run(dns.verify_many(["www.shili.com", "vpn.shili.com", "oa.shili.com"]))
+        assert out["www.shili.com"] == ["2.2.2.2"]
+        assert out["vpn.shili.com"] == ["1.1.1.1"]   # 验活只看解析结果
+        assert out["oa.shili.com"] == []
+    finally:
+        dns.resolve_host = orig
+
+
+def test_migration_idempotent_temp_db() -> None:
+    """老库（无 P5 列）迁移两次：补列、回填、幂等。"""
+    import tempfile
+    from pathlib import Path
+    from sqlalchemy import create_engine, inspect, text
+    from app import migrations
+
+    tmp = Path(tempfile.mkdtemp()) / "t.db"
+    eng = create_engine(f"sqlite:///{tmp.as_posix()}", future=True)
+    with eng.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE domain_list (id INTEGER PRIMARY KEY, task_id INTEGER, "
+            "unit_name TEXT, domain TEXT, source TEXT, status TEXT, created_at TIMESTAMP)"
+        ))
+        conn.execute(text(
+            "INSERT INTO domain_list (id, task_id, unit_name, domain, source, status, created_at) "
+            "VALUES (1, 1, '旧单位', 'old.com', 'baidu｜x', 'candidate', '2026-01-01 00:00:00')"
+        ))
+
+    # 绑定迁移函数到临时引擎执行
+    orig_engine = migrations.engine
+    migrations.engine = eng
+    try:
+        migrations.migrate()
+        migrations.migrate()
+    finally:
+        migrations.engine = orig_engine
+
+    cols = {c["name"] for c in inspect(eng).get_columns("domain_list")}
+    assert {"layer", "parent_domain", "provider", "confidence",
+            "resolved_ip", "alive", "updated_at"} <= cols
+    with eng.begin() as conn:
+        row = conn.execute(text(
+            "SELECT layer, provider, confidence FROM domain_list WHERE id=1"
+        )).one()
+        assert row == ("apex", "se_general", "low"), row
+
+
+def test_registry_selection() -> None:
+    from app.core.discovery.registry import all_codes, selected_codes
+
+    settings = {"t2_apex_enabled": {"miit": True, "fofa": False},
+                "t2_sub_enabled": {"brute": True}}
+    assert "miit" in all_codes("apex") and "brute" in all_codes("sub")
+    # 空选择 = 设置启用的全部
+    apex = selected_codes("apex", {}, settings)
+    assert "miit" in apex and "fofa" not in apex
+    # 任务显式勾选优先于全局开关
+    apex2 = selected_codes("apex", {"apex_providers": ["fofa"]}, settings)
+    assert apex2 == ["fofa"]
+    sub = selected_codes("sub", {}, settings)
+    assert "brute" in sub  # 全局开启时包含爆破（任务内仍需二次授权）
+
+
 def main() -> None:
     test_url_and_domain()
     test_extract_html()
@@ -216,6 +423,12 @@ def main() -> None:
     test_docin_url_and_headers()
     test_sensitive()
     test_app_imports()
+    test_engine_query_plans()
+    test_merge_confidence_and_evidence()
+    _test_subdomain_guard()
+    test_dns_wildcard_and_verify()
+    test_migration_idempotent_temp_db()
+    test_registry_selection()
     print("offline smoke ok")
 
 

@@ -120,6 +120,74 @@ class Scheduler:
         self.runs[task_id] = ctrl
         asyncio.create_task(self._safe_run(task_id, ctrl))
 
+    @staticmethod
+    def _is_t2_apex(task_id: int) -> bool:
+        from ..database import SessionLocal
+
+        db = SessionLocal()
+        try:
+            task = db.get(Task, task_id)
+            return bool(task and task.template_type == "T2")
+        finally:
+            db.close()
+
+    async def enumerate_subs(self, task_id: int) -> None:
+        """T2 人工闸门后启动阶段 B（子域枚举）。"""
+        from ..database import SessionLocal
+
+        if self.runs:
+            raise RuntimeError("已有任务在执行，本机单任务顺序调度")
+        db = SessionLocal()
+        try:
+            task = db.get(Task, task_id)
+            if task is None:
+                raise ValueError("任务不存在")
+            if task.template_type != "T2":
+                raise ValueError("仅 T2 任务可枚举子域")
+            if task.status not in ("await_gate", "done"):
+                raise ValueError(
+                    f"任务状态 {task.status}，需在待确认主域（await_gate）阶段枚举子域"
+                )
+            confirmed = db.scalar(
+                select(func.count(DomainList.id)).where(
+                    DomainList.task_id == task_id,
+                    DomainList.layer == "apex",
+                    DomainList.status == "confirmed",
+                )
+            ) or 0
+            if not confirmed:
+                raise ValueError("请先确认至少一个主域名再枚举子域")
+        finally:
+            db.close()
+
+        ctrl = RunControl(task_id)
+        self.runs[task_id] = ctrl
+        asyncio.create_task(self._safe_run_subs(task_id, ctrl))
+
+    async def _safe_run_subs(self, task_id: int, ctrl: RunControl) -> None:
+        try:
+            from .discovery.pipeline import t2_pipeline
+
+            await t2_pipeline.run_subs(task_id, ctrl)
+        except Exception as exc:
+            from ..database import SessionLocal
+
+            db = SessionLocal()
+            try:
+                task = db.get(Task, task_id)
+                if task and task.status != "done":
+                    task.status = "failed"
+                    task.error_msg = f"子域枚举异常：{exc}"
+                    task.finished_at = datetime.now()
+                    db.commit()
+            finally:
+                db.close()
+            await manager.broadcast(
+                task_id, {"type": "task_done", "status": "failed", "error": str(exc)}
+            )
+        finally:
+            self.runs.pop(task_id, None)
+
     async def pause(self, task_id: int) -> None:
         ctrl = self.runs.get(task_id)
         if ctrl is None:
@@ -166,14 +234,16 @@ class Scheduler:
             task = db.get(Task, task_id)
             if task is None:
                 raise ValueError("任务不存在")
-            if task.status not in ("pending", "failed", "paused_manual"):
+            allowed = ("pending", "failed", "paused_manual")
+            # T2 在待确认主域阶段允许重新启动以续跑失败/重置的阶段 A provider
+            if task.template_type == "T2" and task.status == "await_gate":
+                allowed = ("pending", "failed", "paused_manual", "await_gate")
+            if task.status not in allowed:
                 raise ValueError(f"任务状态 {task.status} 不可启动")
             if task.template_type == "T1" and not split_lines(task.keywords):
                 raise ValueError("T1 关键词检索需要至少一个关键词")
-            if task.template_type == "T2" and not (
-                split_lines(task.keywords) or task.unit_name.strip()
-            ):
-                raise ValueError("T2 域名归集需要单位名称")
+            if task.template_type == "T2" and not task.unit_name.strip():
+                raise ValueError("T2 域名归集需要单位全称（别名/简称可在关键词栏多行填写）")
             if task.template_type in ("T3", "T4", "T5") and not split_lines(
                 task.domain_scope
             ):
@@ -182,7 +252,10 @@ class Scheduler:
             db.close()
 
     def _build_queries(self, db, task: Task) -> list[str]:
-        """各模板实际送入搜索框的关键词（T3~T5 为语法包装串）。"""
+        """各模板实际送入搜索框的关键词（T3~T5 为语法包装串）。
+
+        T2 已改走 discovery 两阶段流水线，不会进入本方法。
+        """
         ttype = task.template_type
         if ttype == "T1":
             return split_lines(task.keywords)
@@ -202,8 +275,7 @@ class Scheduler:
         expression = expression_row.expression if expression_row else ""
 
         if ttype == "T2":
-            bases = split_lines(task.keywords) or [task.unit_name.strip()]
-            return [wrap_keyword(expression, keyword=base) for base in bases]
+            return []  # 防御：T2 走 discovery pipeline，不生成 task_unit
 
         domains = split_lines(task.domain_scope)
         return [
@@ -250,6 +322,11 @@ class Scheduler:
     # ------------------------------------------------------------------ #
     async def _safe_run(self, task_id: int, ctrl: RunControl) -> None:
         try:
+            if self._is_t2_apex(task_id):
+                from .discovery.pipeline import t2_pipeline
+
+                await t2_pipeline.run_apex(task_id, ctrl)
+                return
             await self._run(task_id, ctrl)
         except Exception as exc:  # 调度层兜底，任务置失败
             from ..database import SessionLocal

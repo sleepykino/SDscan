@@ -20,3 +20,4 @@ backend/tests/_e2e_artifacts/
 
 #doc
 doc/*
+AGENTS.md

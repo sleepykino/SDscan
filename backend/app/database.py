@@ -39,7 +39,9 @@ def get_db() -> Generator[Session, None, None]:
 def init_db() -> None:
     """建表并写入种子数据（幂等）。"""
     from . import models  # noqa: F401  确保模型已注册到 metadata
+    from .migrations import migrate
     from .seed import seed_all
 
+    migrate()  # 老库补列（P5），必须在 create_all 之前
     Base.metadata.create_all(bind=engine)
     seed_all()

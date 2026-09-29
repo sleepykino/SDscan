@@ -237,10 +237,56 @@ class DomainOut(ORMModel):
     domain: str
     source: str
     status: str
+    layer: str = "apex"
+    parent_domain: str = ""
+    provider: str = ""
+    confidence: str = "low"
+    resolved_ip: str = ""
+    alive: Optional[bool] = None
+    updated_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    evidence_count: int = 0
 
 
 class DomainPatch(BaseModel):
     status: str = Field(pattern=r"^(candidate|confirmed|rejected)$")
+
+
+class BatchStatusIn(BaseModel):
+    ids: list[int]
+    status: str = Field(pattern=r"^(confirmed|rejected|candidate)$")
+    cascade: bool = False
+
+
+class EvidenceOut(ORMModel):
+    id: int
+    task_id: int
+    domain_list_id: int
+    provider: str
+    stage: str
+    icp_no: str
+    icp_unit: str
+    site_name: str
+    cert_org: str
+    ref_url: str
+    detail: dict
+    created_at: datetime
+
+
+class ProviderRunOut(ORMModel):
+    id: int
+    task_id: int
+    stage: str
+    provider: str
+    target: str
+    status: str
+    error_msg: str
+    stats: dict
+    updated_at: datetime
+
+
+class TestProviderIn(BaseModel):
+    provider: str
 
 
 class ListResponse(BaseModel):

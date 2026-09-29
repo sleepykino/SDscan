@@ -16,6 +16,7 @@ const STATUS_MAP = {
   pending: { text: 'pending 待执行', color: '#9DA7B3', solid: false },
   running: { text: 'running 执行中', color: '#3FB950', solid: false },
   paused_manual: { text: 'paused 已暂停', color: '#9DA7B3', solid: false },
+  await_gate: { text: 'await_gate 待确认主域', color: '#D29922', solid: false },
   blocked: { text: 'blocked 待过码', color: '#D29922', solid: false },
   failed: { text: 'failed 失败', color: '#F85149', solid: false },
   done: { text: 'done 已完成', color: '#0D1117', solid: true },

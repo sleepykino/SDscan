@@ -38,6 +38,13 @@ export const taskApi = {
     http.post(`/tasks/${taskId}/risk/${platformId}/solve-done`),
   solveCancel: (taskId, platformId) =>
     http.post(`/tasks/${taskId}/risk/${platformId}/solve-cancel`),
+  // T2 两阶段
+  enumerateSubs: (id) => http.post(`/tasks/${id}/enumerate-subs`),
+  providers: (id, stage) => http.get(`/tasks/${id}/providers`, { params: { stage } }),
+  retryProvider: (id, provider, params) =>
+    http.post(`/tasks/${id}/providers/${provider}/retry`, null, { params }),
+  miitDone: (id) => http.post(`/tasks/${id}/providers/miit/solve-done`),
+  miitCancel: (id) => http.post(`/tasks/${id}/providers/miit/solve-cancel`),
 }
 
 // ---------------- 结果
@@ -85,12 +92,22 @@ export const attachmentApi = {
 export const domainApi = {
   list: (params) => http.get('/domains', { params }),
   patch: (id, status) => http.patch(`/domains/${id}`, { status }),
+  evidence: (id) => http.get(`/domains/${id}/evidence`),
+  batch: (ids, status, cascade = false) =>
+    http.post('/domains/batch', { ids, status, cascade }),
+  exportUrl: (params) => {
+    const qs = new URLSearchParams(
+      Object.entries(params || {}).filter(([, v]) => v !== '' && v != null)
+    ).toString()
+    return `/api/domains/export/xlsx?${qs}`
+  },
 }
 
 // ---------------- 设置
 export const settingsApi = {
   get: () => http.get('/settings'),
   put: (data) => http.put('/settings', data),
+  testProvider: (provider) => http.post('/settings/test-provider', { provider }),
 }
 
 // 截图静态资源 URL（路径相对 data/ 目录）

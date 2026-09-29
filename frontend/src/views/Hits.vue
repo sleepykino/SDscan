@@ -3,7 +3,7 @@
     <h2 class="page-title">
       <span class="bar" />敏感命中
       <span class="mono" style="margin-left:10px;color:var(--sd-text-sub);font-size:13px">
-        共 {{ total }} 条（命中文本已脱敏）
+        共 {{ total }} 条
       </span>
     </h2>
 

@@ -9,15 +9,19 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..config import DATA_DIR, load_settings
+from ..core.discovery.apex.miit import mark_cancel as miit_cancel
+from ..core.discovery.apex.miit import mark_done as miit_done
 from ..core.engine.web_collector import web_collector
 from ..core.scheduler import scheduler
 from ..database import get_db
 from ..models import (
     Attachment,
+    DomainEvidence,
     DomainList,
     Platform,
     SensitiveHit,
     SearchResult,
+    T2ProviderRun,
     Task,
     TaskUnit,
 )
@@ -98,6 +102,8 @@ def delete_task(task_id: int, db: Session = Depends(get_db)):
                 pass
         db.delete(att)
     db.execute(delete(SearchResult).where(SearchResult.task_id == task_id))
+    db.execute(delete(DomainEvidence).where(DomainEvidence.task_id == task_id))
+    db.execute(delete(T2ProviderRun).where(T2ProviderRun.task_id == task_id))
     db.execute(delete(DomainList).where(DomainList.task_id == task_id))
     db.execute(delete(TaskUnit).where(TaskUnit.task_id == task_id))
     db.delete(task)
@@ -220,3 +226,87 @@ async def solve_done(task_id: int, platform_id: int, db: Session = Depends(get_d
 async def solve_cancel(task_id: int, platform_id: int):
     await web_collector.cancel_solve()
     return {"message": "已取消过码"}
+
+
+# ---------------------------------------------------------------- T2 闸门 / 枚举 / provider
+@router.post("/{task_id}/enumerate-subs", response_model=schemas.MessageOut)
+async def enumerate_subs(task_id: int):
+    try:
+        await scheduler.enumerate_subs(task_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+    return {"message": "子域枚举已启动"}
+
+
+@router.get("/{task_id}/providers", response_model=list[schemas.ProviderRunOut])
+def list_provider_runs(
+    task_id: int,
+    stage: str | None = None,
+    db: Session = Depends(get_db),
+):
+    stmt = select(T2ProviderRun).where(T2ProviderRun.task_id == task_id)
+    if stage:
+        stmt = stmt.where(T2ProviderRun.stage == stage)
+    return list(db.execute(
+        stmt.order_by(T2ProviderRun.stage, T2ProviderRun.target, T2ProviderRun.id)
+    ).scalars())
+
+
+@router.post(
+    "/{task_id}/providers/{provider}/retry",
+    response_model=schemas.MessageOut,
+)
+def retry_provider(
+    task_id: int,
+    provider: str,
+    stage: str | None = None,
+    target: str | None = None,
+    db: Session = Depends(get_db),
+):
+    task = db.get(Task, task_id)
+    if task is None:
+        raise HTTPException(404, "任务不存在")
+    if task_id in scheduler.runs:
+        raise HTTPException(409, "任务运行中，请先暂停/取消")
+    rows = list(db.execute(
+        select(T2ProviderRun).where(
+            T2ProviderRun.task_id == task_id,
+            T2ProviderRun.provider == provider,
+        )
+    ).scalars())
+    if stage:
+        rows = [r for r in rows if r.stage == stage]
+    if target is not None:
+        rows = [r for r in rows if r.target == target]
+    if not rows:
+        raise HTTPException(404, "没有匹配的 provider 记录")
+    for row in rows:
+        row.status = "pending"
+        row.error_msg = ""
+    db.commit()
+    return {"message": f"已重置 {len(rows)} 条 provider 记录，可重新启动该任务续跑"}
+
+
+@router.post(
+    "/{task_id}/providers/miit/solve-done",
+    response_model=schemas.MessageOut,
+)
+async def miit_solve_done(task_id: int):
+    """用户在有头窗口完成查询：放行 miit provider（窗口由 provider 读取后关闭）。"""
+    miit_done(task_id)
+    return {"message": "已确认查询完成，正在读取备案结果"}
+
+
+@router.post(
+    "/{task_id}/providers/miit/solve-cancel",
+    response_model=schemas.MessageOut,
+)
+async def miit_solve_cancel(task_id: int):
+    miit_cancel(task_id)
+    try:
+        await web_collector.cancel_solve()
+    except Exception:
+        pass
+    return {"message": "已取消工信部过码"}

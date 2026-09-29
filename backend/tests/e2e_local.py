@@ -302,20 +302,28 @@ async def main():
             assert ahits["total"] >= 1, ahits
             print(f"[ok] T3：附件 {atts[0]['filename']} 解析成功，附件命中 {ahits['total']} 条")
 
-            # ---- T2 域名归集
+            # ---- T2 域名归集（新链路：仅启用通用搜索兜底源，主域确认后进入闸门）
             t2 = (await api.post("/api/tasks", json={
                 "name": "E2E-T2", "template_type": "T2",
                 "unit_name": "示范单位",
                 "platform_ids": [platform_id], "max_pages": 1,
                 "request_interval": 0.1,
+                "params": {
+                    "apex_providers": ["se_general"],
+                    "sub_providers": [],
+                    "se_platform_ids": [platform_id],
+                    "se_max_pages": 1,
+                },
             })).json()
             created["tasks"].append(t2["id"])
             await api.post(f"/api/tasks/{t2['id']}/start")
-            await wait_status(api, t2["id"], {"done"}, timeout=60)
-            domains = (await api.get("/api/domains", params={"task_id": t2["id"]})).json()
+            gate = await wait_status(api, t2["id"], {"await_gate", "done", "failed"}, timeout=60)
+            assert gate["status"] == "await_gate", gate
+            domains = (await api.get("/api/domains",
+                                     params={"task_id": t2["id"], "layer": "apex"})).json()
             names = {d["domain"] for d in domains}
             assert "demo-unit.gov.cn" in names, names
-            print(f"[ok] T2：候选域名 {names}")
+            print(f"[ok] T2：候选主域 {names}，任务进入 await_gate 闸门")
 
             # ---- Excel 导出
             export = await api.get("/api/results/export", params={"task_id": t5["id"]})
@@ -378,5 +386,167 @@ async def main():
         fixture.shutdown()
 
 
+# ------------------------------------------------------------------
+# T2 两阶段流水线：进程内 ASGI + 打桩 provider（不打真网、不弹浏览器）
+# ------------------------------------------------------------------
+class StubApex:
+    code = "stubapex"
+    display_name = "打桩主域源"
+
+    def is_configured(self, settings):
+        return True
+
+    async def run(self, ctx):
+        from app.core.discovery.base import ApexResult, Evidence
+        yield ApexResult(
+            domain="stub-a.com",
+            evidence=Evidence(
+                provider="stubapex", icp_no="京ICP备888号",
+                icp_unit=ctx.unit_name, site_name="示范单位官网",
+                ref_url="https://www.stub-a.com",
+            ),
+        )
+        yield ApexResult(
+            domain="stub-b.net",
+            evidence=Evidence(
+                provider="stubapex", site_name="某同名第三方页面",
+                ref_url="https://www.stub-b.net/x",
+            ),
+        )
+
+
+class StubSub:
+    code = "stubsub"
+    display_name = "打桩子域源"
+
+    def is_configured(self, settings):
+        return True
+
+    async def run(self, ctx, apex):
+        from app.core.discovery.base import Evidence, SubResult
+        if apex != "stub-a.com":
+            return
+        for host in ("www.stub-a.com", "vpn.stub-a.com"):
+            yield SubResult(
+                host=host, apex=apex,
+                evidence=Evidence(provider="stubsub", stage="sub",
+                                  ref_url=f"https://{host}"),
+            )
+
+
+async def test_t2_pipeline_inprocess():
+    """阶段A → 闸门 → 400 分支 → 确认主域 → 阶段B → DNS验活（假解析）→ 导出。"""
+    from app.database import init_db
+    from app.main import app
+    from app.core.discovery import registry
+    from app.core.discovery import dns as dns_mod
+    from app.ws.manager import manager
+
+    init_db()
+    registry.set_override("stubapex", StubApex())
+    registry.set_override("stubsub", StubSub())
+
+    async def fake_resolve(host: str, timeout: float = 5.0):
+        return ["10.0.0.1"] if host == "www.stub-a.com" else []
+
+    orig_resolve = dns_mod.resolve_host
+    dns_mod.resolve_host = fake_resolve
+
+    task_id = None
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t2",
+                                      timeout=30) as api:
+            task = (await api.post("/api/tasks", json={
+                "name": "E2E-T2-pipeline", "template_type": "T2",
+                "unit_name": "示范单位有限公司", "keywords": "示范单位",
+                "request_interval": 0,
+                "params": {
+                    "apex_providers": ["stubapex"],
+                    "sub_providers": ["stubsub"],
+                    "engine_max_pages": 1,
+                },
+            })).json()
+            task_id = task["id"]
+            r = await api.post(f"/api/tasks/{task_id}/start")
+            assert r.status_code == 200, r.text
+
+            gate = await wait_status(api, task_id, {"await_gate"}, timeout=30)
+            assert gate["status"] == "await_gate", gate
+
+            apex = (await api.get("/api/domains",
+                                   params={"task_id": task_id, "layer": "apex"})).json()
+            by_domain = {d["domain"]: d for d in apex}
+            assert set(by_domain) == {"stub-a.com", "stub-b.net"}, by_domain
+            assert by_domain["stub-a.com"]["confidence"] == "high"
+            assert by_domain["stub-b.net"]["confidence"] == "low"
+            ev = (await api.get(
+                f"/api/domains/{by_domain['stub-a.com']['id']}/evidence")).json()
+            assert ev and ev[0]["icp_unit"] == "示范单位有限公司"
+
+            # 未确认主域时枚举 → 400
+            bad = await api.post(f"/api/tasks/{task_id}/enumerate-subs")
+            assert bad.status_code == 400, bad.text
+
+            # 确认高置信主域，驳回落低置信同名站
+            await api.post("/api/domains/batch",
+                           json={"ids": [by_domain["stub-a.com"]["id"]],
+                                 "status": "confirmed"})
+            await api.post("/api/domains/batch",
+                           json={"ids": [by_domain["stub-b.net"]["id"]],
+                                 "status": "rejected"})
+
+            runs = (await api.get(f"/api/tasks/{task_id}/providers")).json()
+            assert any(r["provider"] == "stubapex" and r["status"] == "done" for r in runs)
+
+            # 阶段 B
+            r = await api.post(f"/api/tasks/{task_id}/enumerate-subs")
+            assert r.status_code == 200, r.text
+            final = await wait_status(api, task_id, {"done"}, timeout=30)
+            assert final["status"] == "done", final
+
+            subs = (await api.get("/api/domains",
+                                   params={"task_id": task_id, "layer": "sub"})).json()
+            sub_map = {s["domain"]: s for s in subs}
+            assert set(sub_map) == {"www.stub-a.com", "vpn.stub-a.com"}, sub_map
+            assert sub_map["www.stub-a.com"]["alive"] is True
+            assert sub_map["www.stub-a.com"]["resolved_ip"] == "10.0.0.1"
+            assert sub_map["vpn.stub-a.com"]["alive"] is False
+            assert all(s["parent_domain"] == "stub-a.com" for s in subs)
+
+            # WS 事件序列（从进程内 manager 缓冲读取）
+            kinds = {e["type"] for e in manager._buffers.get(task_id, [])}
+            assert {"provider_status", "domain", "domain_evidence",
+                    "t2_gate", "task_done"} <= kinds, kinds
+
+            # 导出
+            export = await api.get("/api/domains/export/xlsx",
+                                    params={"task_id": task_id})
+            assert export.status_code == 200 and len(export.content) > 500
+            print("[ok] T2 两阶段流水线（打桩）：主域置信度/闸门/子域/验活/导出 全部通过")
+    finally:
+        dns_mod.resolve_host = orig_resolve
+        registry.set_override("stubapex", None)
+        registry.set_override("stubsub", None)
+        manager.clear(task_id) if task_id else None
+        if task_id is not None:
+            # 直接清理（进程内无 HTTP 服务时仍可用 ORM）
+            from sqlalchemy import delete
+            from app.database import SessionLocal
+            from app import models
+            db = SessionLocal()
+            for model in (models.DomainEvidence, models.T2ProviderRun,
+                          models.DomainList):
+                db.execute(delete(model).where(model.task_id == task_id))
+            db.execute(delete(models.Task).where(models.Task.id == task_id))
+            db.commit()
+            db.close()
+
+
+async def run_all():
+    await main()
+    await test_t2_pipeline_inprocess()
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(run_all())

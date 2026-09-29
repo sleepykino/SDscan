@@ -1,4 +1,4 @@
-"""ORM 模型：对应详细设计 §3 的 9 张表。
+"""ORM 模型：对应详细设计 §3 的 9 张表 + P5 T2 改造新增 2 张表（共 11 张）。
 
 JSON 字段使用 SQLAlchemy 通用 ``JSON`` 类型（SQLite 下以 JSON1 文本存储），
 保证迁移 PostgreSQL 时模型无需改动。
@@ -182,7 +182,7 @@ class Attachment(Base):
 
 
 class DomainList(Base):
-    """域名清单表（详细设计 3.8，T2 产出）。"""
+    """域名清单表（详细设计 3.8，T2 产出；P5 扩列支持两阶段归集）。"""
 
     __tablename__ = "domain_list"
     __table_args__ = (
@@ -196,7 +196,70 @@ class DomainList(Base):
     source: Mapped[str] = mapped_column(Text, default="")
     # candidate/confirmed/rejected
     status: Mapped[str] = mapped_column(String(16), default="candidate", index=True)
+    # ---- P5 T2 改造新增 ----
+    layer: Mapped[str] = mapped_column(String(8), default="apex", index=True)  # apex/sub
+    parent_domain: Mapped[str] = mapped_column(String(255), default="", index=True)
+    provider: Mapped[str] = mapped_column(String(32), default="", index=True)
+    confidence: Mapped[str] = mapped_column(String(8), default="low", index=True)
+    resolved_ip: Mapped[str] = mapped_column(String(255), default="")
+    alive: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
     created_at: Mapped[datetime] = mapped_column(default=_now)
+
+    evidences: Mapped[list["DomainEvidence"]] = relationship(
+        back_populates="domain_row", cascade="all, delete-orphan"
+    )
+
+
+class DomainEvidence(Base):
+    """域名归属证据表（P5 D6）：一个域名多条证据，驳回/确认不删除。"""
+
+    __tablename__ = "domain_evidence"
+    __table_args__ = (
+        UniqueConstraint(
+            "domain_list_id", "provider", "ref_url", name="uq_evidence"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("task.id"), index=True)
+    domain_list_id: Mapped[int] = mapped_column(
+        ForeignKey("domain_list.id"), index=True
+    )
+    provider: Mapped[str] = mapped_column(String(32), index=True)
+    stage: Mapped[str] = mapped_column(String(8), default="apex")  # apex/sub
+    icp_no: Mapped[str] = mapped_column(String(128), default="")
+    icp_unit: Mapped[str] = mapped_column(String(255), default="")
+    site_name: Mapped[str] = mapped_column(String(255), default="")
+    cert_org: Mapped[str] = mapped_column(String(255), default="")
+    ref_url: Mapped[str] = mapped_column(Text, default="")
+    detail: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+    domain_row: Mapped[DomainList] = relationship(back_populates="evidences")
+
+
+class T2ProviderRun(Base):
+    """T2 provider 运行状态表（P5 D5，断点续跑）。"""
+
+    __tablename__ = "t2_provider_run"
+    __table_args__ = (
+        UniqueConstraint(
+            "task_id", "stage", "provider", "target", name="uq_provider_run"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("task.id"), index=True)
+    stage: Mapped[str] = mapped_column(String(8), index=True)  # apex/sub
+    provider: Mapped[str] = mapped_column(String(32), index=True)
+    target: Mapped[str] = mapped_column(String(255), default="")  # 阶段B主域
+    # pending/running/done/failed/skipped
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    error_msg: Mapped[str] = mapped_column(Text, default="")
+    stats: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 
 
 class SyntaxDict(Base):
