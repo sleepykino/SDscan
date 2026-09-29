@@ -34,6 +34,7 @@ DEFAULT_SETTINGS = {
     ),
     "t5_max_detail": 10,               # T5 每个结果页最多跟进正文页数量
     "t3_download_limit": 20,           # T3 每个任务最多下载附件数量
+    "screenshot_timestamp": True,      # 截图右下角叠加本机时间水印
     # ---- P5 T2 域名归集 ----
     "t2_apex_enabled": {               # 阶段A 数据源总开关
         "miit": True, "chinaz": True, "fofa": True, "hunter": True,

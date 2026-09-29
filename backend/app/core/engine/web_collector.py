@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import datetime
 
 from ...config import SCREENSHOT_DIR, load_settings
 from .base import FetchedPage
@@ -28,6 +29,34 @@ LAUNCH_ARGS = [
     "--no-sandbox",
     "--disable-dev-shm-usage",
 ]
+
+# 截图时间水印（右下角）：截图前注入、截图后移除；失败一律静默，不影响抓取
+_ADD_WATERMARK_JS = """
+(ts) => {
+  const id = 'sdscan-shot-watermark';
+  let el = document.getElementById(id);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = id;
+    document.documentElement.appendChild(el);
+  }
+  el.textContent = '截图时间:' + ts;
+  el.style.cssText = [
+    'position:fixed', 'right:12px', 'bottom:12px', 'z-index:2147483647',
+    'padding:6px 10px', 'border-radius:3px',
+    'font:13px Consolas,"JetBrains Mono",monospace',
+    'color:#7EE787', 'background:rgba(10,14,20,.72)',
+    'border:1px solid rgba(126,231,135,.35)',
+    'pointer-events:none', 'letter-spacing:.3px', 'white-space:nowrap'
+  ].join(';');
+}
+"""
+_REMOVE_WATERMARK_JS = """
+() => {
+  const el = document.getElementById('sdscan-shot-watermark');
+  if (el) el.remove();
+}
+"""
 
 
 class WebCollector:
@@ -122,6 +151,7 @@ class WebCollector:
             page = await context.new_page()
             self._active_pages.add(page)
             status = 0
+            watermark_added = False
             try:
                 response = await page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
                 if response is not None:
@@ -137,6 +167,14 @@ class WebCollector:
                 except Exception:
                     text = ""
                 if save_screenshot:
+                    if settings.get("screenshot_timestamp", True):
+                        try:
+                            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            await page.evaluate(_ADD_WATERMARK_JS, ts)
+                            await page.wait_for_timeout(120)  # 等水印渲染
+                            watermark_added = True
+                        except Exception:
+                            pass  # 水印失败绝不影响截图/抓取
                     await page.screenshot(
                         path=str(SCREENSHOT_DIR.parent / screenshot_rel),
                         full_page=False,
@@ -155,6 +193,11 @@ class WebCollector:
                 return FetchedPage(url=url, status=status, error=f"页面抓取失败：{exc}")
             finally:
                 self._active_pages.discard(page)
+                if watermark_added:
+                    try:
+                        await page.evaluate(_REMOVE_WATERMARK_JS)
+                    except Exception:
+                        pass
                 await context.close()
 
     def close_pages_nowait(self) -> None:

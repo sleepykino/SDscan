@@ -25,6 +25,10 @@
         <el-input-number v-model="form.t3_download_limit" :min="1" :max="200" />
         <span class="hint">每个 T3 任务最多下载的附件数量</span>
       </el-form-item>
+      <el-form-item label="截图时间水印">
+        <el-switch v-model="form.screenshot_timestamp" />
+        <span class="hint">截图右下角叠加「截图时间:YYYY-MM-DD HH:MM:SS」</span>
+      </el-form-item>
       <div class="t2-entry">
         T2 域名归集的数据源开关、密钥、subfinder 与爆破配置已移至左侧导航
         <router-link to="/data-sources" class="t2-link">「T2 数据源」</router-link>
@@ -52,6 +56,7 @@ const form = reactive({
   github_token: '',
   t5_max_detail: 10,
   t3_download_limit: 20,
+  screenshot_timestamp: true,
 })
 
 watch(visible, async (val) => {

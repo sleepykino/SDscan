@@ -17,6 +17,7 @@ _ALLOWED = {
     "user_agent",
     "t5_max_detail",
     "t3_download_limit",
+    "screenshot_timestamp",
     # P5 T2
     "t2_apex_enabled",
     "t2_sub_enabled",
